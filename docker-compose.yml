@@ -4,6 +4,9 @@ services:
     container_name: netflix-recommendation-agent
     env_file:
       - .env
+    environment:
+      - HTTP_PROXY=${HTTP_PROXY}
+      - HTTPS_PROXY=${HTTPS_PROXY}
     ports:
       - "8001:8001"
     volumes:
