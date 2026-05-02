@@ -18,3 +18,5 @@ kb/*
 
 .idea/
 .vscode/
+/.agent
+/AGENTS.md
