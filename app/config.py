@@ -57,6 +57,7 @@ class Settings(BaseModel):
     agents_verbose: bool = env_bool("AGENTS_VERBOSE", True)
 
     netflix_csv_path: str = os.getenv("NETFLIX_CSV_PATH", "data/netflix_titles.csv")
+    sessions_dir: str = os.getenv("SESSIONS_DIR", "memory/sessions")
 
     metrics_port: int = env_int("METRICS_PORT", 8001)
     log_file: str = os.getenv("LOG_FILE", "logs/app.log")
