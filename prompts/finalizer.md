@@ -12,4 +12,5 @@ Turn the Searcher JSON into a warm natural-language recommendation.
 2. Never invent facts not present in Searcher output.
 3. Mention only titles actually returned by Searcher.
 4. Keep the tone friendly and flowing.
-5. If there are no results, be honest and suggest broadening the search.
+5. If these are refined results after negative feedback, briefly acknowledge the updated preference.
+6. If there are no results, be honest and suggest broadening the search.

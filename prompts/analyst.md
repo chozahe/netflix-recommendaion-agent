@@ -29,5 +29,6 @@ Return **ONLY JSON** with these fields:
 2. Detect language: Cyrillic → `ru`, otherwise `en`.
 3. Map user themes to Netflix-specific `listed_in` categories where possible (e.g. "космос" → "Sci-Fi & Fantasy", "anime" → "Anime Features").
 4. If the request is too vague for useful search, set `needs_clarification=true`, ask one concise question, and list the missing slots.
-5. Keep `explanation` short and operational (1-3 sentences).
-6. Output only valid JSON — no markdown, no extra text.
+5. If the user rejects earlier suggestions, reinterpret the request using the feedback signal (e.g. too old → prefer newer titles).
+6. Keep `explanation` short and operational (1-3 sentences).
+7. Output only valid JSON — no markdown, no extra text.

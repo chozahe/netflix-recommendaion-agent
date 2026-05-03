@@ -1,7 +1,8 @@
 from pathlib import Path
 
 from app.contracts.conversation import ConversationResponse
-from app.memory.models import ConversationTurn, SessionMemory
+from app.contracts.feedback import FeedbackSignal
+from app.memory.models import ConversationTurn, SessionMemory, StoredRecommendation
 from app.memory.session_store import FileSessionStore
 from app.orchestration.pipeline import run_analyst, run_finalizer, run_searcher
 
@@ -20,9 +21,45 @@ class ConversationService:
     def load_session(self, session_id: str) -> SessionMemory:
         return self.store.load_session(session_id)
 
+    def seed_recommendations(self, session_id: str, titles: list[str]) -> SessionMemory:
+        session = self.store.load_session(session_id)
+        session.last_recommendations = [StoredRecommendation(title=title) for title in titles]
+        session.shown_titles.extend(titles)
+        session.state = "recommended"
+        self.store.save_session(session)
+        return session
+
     def handle_message(self, session_id: str, message: str) -> ConversationResponse:
         session = self.store.load_session(session_id)
         session.turns.append(ConversationTurn(role="user", message=message))
+
+        feedback = self._parse_feedback(message)
+        if session.state == "recommended" and feedback is not None:
+            session.feedback_signals.append(feedback)
+            session.rejected_titles.extend(
+                [item.title for item in session.last_recommendations if item.title not in session.rejected_titles]
+            )
+            session.state = "refining"
+            self.store.save_session(session)
+            if feedback.requires_refinement:
+                response = ConversationResponse(
+                    type="refined_recommendations",
+                    session_id=session.session_id,
+                    message="Окей, давайте попробуем что-то поновее или ближе к вашим пожеланиям.",
+                    recommendations=[],
+                    state=session.state,
+                )
+                self.store.save_session(session)
+                return response
+            response = ConversationResponse(
+                type="clarification",
+                session_id=session.session_id,
+                message="Что именно не подошло: возраст, жанр или темп?",
+                recommendations=[],
+                state=session.state,
+            )
+            self.store.save_session(session)
+            return response
 
         intent = run_analyst(message)
         session.current_intent = intent
@@ -49,3 +86,16 @@ class ConversationService:
             recommendations=session.last_recommendations,
             state=session.state,
         )
+
+    def _parse_feedback(self, message: str) -> FeedbackSignal | None:
+        text = message.lower()
+        is_negative = any(token in text for token in ["отстой", "не", "слишком", "bad", "boring"])
+        if not is_negative:
+            return None
+        if "стар" in text or "old" in text:
+            return FeedbackSignal(kind="age", value="newer", requires_refinement=True)
+        if "медлен" in text or "slow" in text:
+            return FeedbackSignal(kind="pace", value="faster", requires_refinement=True)
+        if "сериал" in text or "фильм" in text:
+            return FeedbackSignal(kind="type", value=text, requires_refinement=True)
+        return FeedbackSignal(kind="generic_rejection", value=None, requires_refinement=False)
