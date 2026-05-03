@@ -12,6 +12,7 @@ from app.agents.definitions import (
 )
 from app.contracts.analyst import AnalystIntent
 from app.monitoring import get_logger
+from app.tools.preference_extractor import PreferenceExtractorTool
 
 _logger = get_logger(__name__)
 
@@ -28,6 +29,31 @@ def _extract_json(text: str) -> str:
     if match:
         return match.group(0)
     return text
+
+
+
+def build_fallback_intent(query: str) -> AnalystIntent:
+    raw = json_module.loads(PreferenceExtractorTool()._run(query))
+    genres = raw.get("genres") or ([raw["genre"]] if raw.get("genre") else [])
+    return AnalystIntent(
+        query=query,
+        content_type=raw.get("content_type"),
+        hard_constraints={
+            "year_from": raw.get("year_from"),
+            "year_to": raw.get("year_to"),
+            "country": raw.get("country"),
+            "rating": (raw.get("rating_filter") or [None])[0],
+        },
+        soft_preferences={
+            "moods": raw.get("moods", {}),
+            "mood_genre_weights": raw.get("mood_genre_weights", {}),
+        },
+        topic_hypotheses=[],
+        genre_hypotheses=genres,
+        mood_hypotheses=list((raw.get("moods") or {}).keys()),
+        language="ru" if re.search(r"[А-Яа-я]", query) else "en",
+        explanation=raw.get("reasoning", "Fallback intent from PreferenceExtractor"),
+    )
 
 
 
@@ -63,25 +89,14 @@ def run_pipeline(query: str) -> str:
         process=Process.sequential,
     )
     _logger.info("analyst_started", query=query)
-    analyst_output = str(crew1.kickoff())
-    _logger.info("analyst_finished")
-
-    analyst_json = _extract_json(analyst_output)
     try:
+        analyst_output = str(crew1.kickoff())
+        _logger.info("analyst_finished")
+        analyst_json = _extract_json(analyst_output)
         intent = AnalystIntent.model_validate(json_module.loads(analyst_json))
-    except Exception:
-        _logger.warning("analyst_contract_parse_failed", output=analyst_json[:300])
-        intent = AnalystIntent(
-            query=query,
-            content_type=None,
-            hard_constraints={},
-            soft_preferences={},
-            topic_hypotheses=[],
-            genre_hypotheses=[],
-            mood_hypotheses=[],
-            language="ru" if re.search(r"[А-Яа-я]", query) else "en",
-            explanation="Fallback intent due to parse failure",
-        )
+    except Exception as exc:
+        _logger.warning("analyst_fallback_used", query=query, error=str(exc))
+        intent = build_fallback_intent(query)
 
     searcher_input = build_searcher_input(intent=intent, last_tool_result={})
     searcher_task = Task(
