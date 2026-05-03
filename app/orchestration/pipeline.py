@@ -12,6 +12,11 @@ from app.agents.definitions import (
 )
 from app.contracts.analyst import AnalystIntent
 from app.contracts.search import Candidate, SearchResult
+from app.conversation.clarification import (
+    build_clarification_question,
+    detect_missing_slots,
+    needs_clarification,
+)
 from app.monitoring import get_logger
 from app.tools.netflix_search import NetflixSearchTool
 
@@ -89,39 +94,45 @@ def build_searcher_input(intent: AnalystIntent, last_tool_result: dict) -> dict:
 
 
 
-def run_pipeline(query: str) -> str:
-    analyst = build_analyst_agent()
-    searcher = build_searcher_agent()
-    finalizer = build_finalizer_agent()
+def run_analyst(query: str) -> AnalystIntent:
+    if needs_clarification(query):
+        return AnalystIntent(
+            query=query,
+            language="ru" if re.search(r"[А-Яа-я]", query) else "en",
+            explanation="Query is too vague for direct search.",
+            needs_clarification=True,
+            clarification_question=build_clarification_question(query),
+            missing_slots=detect_missing_slots(query),
+        )
 
+    analyst = build_analyst_agent()
     analyst_task = Task(
         description=(
             f"User query: {query}\n\n"
-            "Use PreferenceExtractor first. Use KnowledgeSearch only if needed. "
             "Return ONLY strict JSON for the search intent with these fields: "
             "query, content_type, hard_constraints, soft_preferences, topic_hypotheses, "
-            "genre_hypotheses, mood_hypotheses, language, explanation."
+            "genre_hypotheses, mood_hypotheses, language, explanation, "
+            "needs_clarification, clarification_question, missing_slots."
         ),
         expected_output="A strict JSON object matching the AnalystIntent contract.",
         agent=analyst,
     )
-
-    crew1 = Crew(
-        agents=[analyst],
-        tasks=[analyst_task],
-        process=Process.sequential,
-    )
+    crew = Crew(agents=[analyst], tasks=[analyst_task], process=Process.sequential)
     _logger.info("analyst_started", query=query)
     try:
-        analyst_output = str(crew1.kickoff())
+        analyst_output = str(crew.kickoff())
         _logger.info("analyst_finished")
         analyst_json = _extract_json(analyst_output)
-        intent = AnalystIntent.model_validate(json_module.loads(analyst_json))
+        return AnalystIntent.model_validate(json_module.loads(analyst_json))
     except Exception as exc:
         _logger.warning("analyst_fallback_used", query=query, error=str(exc))
-        intent = build_fallback_intent(query)
+        return build_fallback_intent(query)
 
-    searcher_input = build_searcher_input(intent=intent, last_tool_result={})
+
+
+def run_searcher(intent: AnalystIntent, last_tool_result: dict | None = None) -> str:
+    searcher = build_searcher_agent()
+    searcher_input = build_searcher_input(intent=intent, last_tool_result=last_tool_result or {})
     searcher_task = Task(
         description=(
             "You are given the original query and Analyst intent below.\n\n"
@@ -134,20 +145,20 @@ def run_pipeline(query: str) -> str:
         expected_output="A strict JSON object matching the SearchResult contract.",
         agent=searcher,
     )
-
-    search_crew = Crew(
-        agents=[searcher],
-        tasks=[searcher_task],
-        process=Process.sequential,
-    )
-    _logger.info("searcher_started", query=query)
+    search_crew = Crew(agents=[searcher], tasks=[searcher_task], process=Process.sequential)
+    _logger.info("searcher_started", query=intent.query)
     try:
         search_output = str(search_crew.kickoff())
         _logger.info("searcher_finished")
+        return search_output
     except Exception as exc:
-        _logger.warning("searcher_fallback_used", query=query, error=str(exc))
-        search_output = build_fallback_search_result(intent).model_dump_json(ensure_ascii=False)
+        _logger.warning("searcher_fallback_used", query=intent.query, error=str(exc))
+        return build_fallback_search_result(intent).model_dump_json(ensure_ascii=False)
 
+
+
+def run_finalizer(query: str, intent: AnalystIntent, search_output: str) -> str:
+    finalizer = build_finalizer_agent()
     finalizer_task = Task(
         description=(
             f"Original user query: {query}\n\n"
@@ -158,12 +169,17 @@ def run_pipeline(query: str) -> str:
         expected_output="A conversational recommendation message in natural language.",
         agent=finalizer,
     )
-    final_crew = Crew(
-        agents=[finalizer],
-        tasks=[finalizer_task],
-        process=Process.sequential,
-    )
+    final_crew = Crew(agents=[finalizer], tasks=[finalizer_task], process=Process.sequential)
     _logger.info("finalizer_started", query=query)
     result = str(final_crew.kickoff())
     _logger.info("finalizer_finished")
     return result
+
+
+
+def run_pipeline(query: str) -> str:
+    intent = run_analyst(query)
+    if intent.needs_clarification:
+        return intent.clarification_question or "Please clarify your request."
+    search_output = run_searcher(intent=intent, last_tool_result={})
+    return run_finalizer(query=query, intent=intent, search_output=search_output)

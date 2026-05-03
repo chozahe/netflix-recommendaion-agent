@@ -20,10 +20,14 @@ Return **ONLY JSON** with these fields:
 - `mood_hypotheses` — list of mood signals (e.g. ["dark", "suspenseful"])
 - `language` — "ru" if Cyrillic characters present, otherwise "en"
 - `explanation` — short operational summary of your interpretation
+- `needs_clarification` — true if the query is too vague to search directly
+- `clarification_question` — follow-up question if clarification is needed, otherwise null
+- `missing_slots` — list of missing fields that block a good search (e.g. ["content_type"])
 
 ## Rules
 1. Never invent hard constraints — only include what the user explicitly stated.
 2. Detect language: Cyrillic → `ru`, otherwise `en`.
 3. Map user themes to Netflix-specific `listed_in` categories where possible (e.g. "космос" → "Sci-Fi & Fantasy", "anime" → "Anime Features").
-4. Keep `explanation` short and operational (1-3 sentences).
-5. Output only valid JSON — no markdown, no extra text.
+4. If the request is too vague for useful search, set `needs_clarification=true`, ask one concise question, and list the missing slots.
+5. Keep `explanation` short and operational (1-3 sentences).
+6. Output only valid JSON — no markdown, no extra text.

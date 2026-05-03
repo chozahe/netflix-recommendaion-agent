@@ -9,3 +9,8 @@ class ConversationResponse(BaseModel):
     message: str
     recommendations: list["StoredRecommendation"] = Field(default_factory=list)
     state: str
+
+
+from app.memory.models import StoredRecommendation
+
+ConversationResponse.model_rebuild()
