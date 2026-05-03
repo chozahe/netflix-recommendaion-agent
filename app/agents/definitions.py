@@ -6,9 +6,7 @@ from app.llm.factory import create_analyst_llm, create_finalizer_llm, create_sea
 from app.tools import (
     FilterCandidatesTool,
     InspectCandidateTool,
-    KnowledgeSearchTool,
     NetflixSearchTool,
-    PreferenceExtractorTool,
 )
 
 
@@ -17,7 +15,7 @@ def build_analyst_agent() -> Agent:
         role="Preference Analyst",
         goal="Extract structured search intent from user queries in Russian or English",
         backstory=ANALYST_PROMPT,
-        tools=[PreferenceExtractorTool(), KnowledgeSearchTool()],
+        tools=[],
         llm=create_analyst_llm(),
         verbose=settings.agents_verbose,
         allow_delegation=False,
@@ -35,7 +33,6 @@ def build_searcher_agent() -> Agent:
             NetflixSearchTool(),
             FilterCandidatesTool(),
             InspectCandidateTool(),
-            KnowledgeSearchTool(),
         ],
         llm=create_search_llm(),
         verbose=settings.agents_verbose,

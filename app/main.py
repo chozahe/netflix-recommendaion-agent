@@ -18,7 +18,6 @@ _logger = get_logger(__name__)
 def main() -> None:
     ensure_runtime_ready(
         logs_dir=Path(settings.log_file).parent,
-        chroma_dir=Path(settings.chroma_path),
     )
     setup_logging(settings.log_file)
     setup_metrics(settings.metrics_port)

@@ -14,7 +14,6 @@ from app.contracts.analyst import AnalystIntent
 from app.contracts.search import Candidate, SearchResult
 from app.monitoring import get_logger
 from app.tools.netflix_search import NetflixSearchTool
-from app.tools.preference_extractor import PreferenceExtractorTool
 
 _logger = get_logger(__name__)
 
@@ -35,26 +34,16 @@ def _extract_json(text: str) -> str:
 
 
 def build_fallback_intent(query: str) -> AnalystIntent:
-    raw = json_module.loads(PreferenceExtractorTool()._run(query))
-    genres = raw.get("genres") or ([raw["genre"]] if raw.get("genre") else [])
     return AnalystIntent(
         query=query,
-        content_type=raw.get("content_type"),
-        hard_constraints={
-            "year_from": raw.get("year_from"),
-            "year_to": raw.get("year_to"),
-            "country": raw.get("country"),
-            "rating": (raw.get("rating_filter") or [None])[0],
-        },
-        soft_preferences={
-            "moods": raw.get("moods", {}),
-            "mood_genre_weights": raw.get("mood_genre_weights", {}),
-        },
+        content_type=None,
+        hard_constraints={},
+        soft_preferences={},
         topic_hypotheses=[],
-        genre_hypotheses=genres,
-        mood_hypotheses=list((raw.get("moods") or {}).keys()),
+        genre_hypotheses=[],
+        mood_hypotheses=[],
         language="ru" if re.search(r"[А-Яа-я]", query) else "en",
-        explanation=raw.get("reasoning", "Fallback intent from PreferenceExtractor"),
+        explanation="Analyst failed — passing raw query to Searcher with minimal intent",
     )
 
 
