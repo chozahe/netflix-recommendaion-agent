@@ -12,6 +12,7 @@ class ConversationTurn(BaseModel):
 class StoredRecommendation(BaseModel):
     title: str
     reason: str | None = None
+    poster_url: str | None = None
 
 
 class SessionMemory(BaseModel):

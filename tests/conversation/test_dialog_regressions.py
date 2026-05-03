@@ -30,7 +30,10 @@ def test_clarification_answer_merges_with_existing_intent(tmp_path, monkeypatch)
 
     monkeypatch.setattr("app.conversation.service.run_analyst", fake_run_analyst)
     monkeypatch.setattr("app.conversation.service.run_searcher", fake_run_searcher)
-    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: "final")
+    monkeypatch.setattr(
+        "app.conversation.service.run_finalizer",
+        lambda message, intent, search_output: {"message": "final", "posters": []},
+    )
 
     first = service.handle_message(session.session_id, "хочу что-нибудь мрачное")
     second = service.handle_message(session.session_id, "фильм")
@@ -65,7 +68,10 @@ def test_negative_feedback_reruns_search_and_returns_structured_recommendations(
         return '{"selected": [{"title": "New Title", "reason": "newer"}]}'
 
     monkeypatch.setattr("app.conversation.service.run_searcher", fake_run_searcher)
-    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: "refined")
+    monkeypatch.setattr(
+        "app.conversation.service.run_finalizer",
+        lambda message, intent, search_output: {"message": "refined", "posters": []},
+    )
 
     response = service.handle_message(session.session_id, "это отстой, слишком старое")
 

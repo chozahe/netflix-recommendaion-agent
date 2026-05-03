@@ -43,7 +43,10 @@ def test_association_query_prefers_db_first_then_enrichment(tmp_path, monkeypatc
             "enrichment_used": True,
         },
     )
-    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: "ready")
+    monkeypatch.setattr(
+        "app.conversation.service.run_finalizer",
+        lambda message, intent, search_output: {"message": "ready", "posters": []},
+    )
 
     response = service.handle_message(
         session.session_id,

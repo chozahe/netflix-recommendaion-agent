@@ -9,7 +9,8 @@
 - 3-agent linear pipeline: **Analyst** → **Searcher** → **Finalizer**, wrapped in **ConversationService** for multi-turn dialog.
 - Analyst-led clarification: analyst decides when clarification is needed (max 2 turns), with relaxed-answer detection (`любое / пофиг / не важно`).
 - Bounded DB-first enrichment: optional post-retrieval reranking of CSV candidates via external signals and bounded DuckDuckGo search snippets, never inventing new titles.
-- Session memory with accumulating preference memory (`accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history`).
+- Finalizer-side poster enrichment: Finalizer may use `PosterLookup` only for verified Searcher titles and return optional `poster_url` metadata.
+- Session memory with accumulating preference memory (`accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history`) plus poster-aware `StoredRecommendation` items.
 - Orchestration framework: [CrewAI](https://docs.crewai.com/) with Tools.
 - Local-first runtime — **no Docker support**.
 - LLM client layer: OpenCode Go via OpenAI-compatible and Anthropic-style adapters.
@@ -36,8 +37,8 @@ app/
 ├── monitoring/       # structlog + Prometheus metrics
 ├── orchestration/    # Pipeline wiring + maybe_enrich_search_output + fallbacks
 ├── runtime/          # Local runtime bootstrap
-├── search/           # Catalog retrieval + enricher + real bounded web_search adapter
-└── tools/            # CrewAI tools (NetflixSearch, FilterCandidates, InspectCandidate)
+├── search/           # Catalog retrieval + enricher + poster lookup helpers + bounded web_search adapter
+└── tools/            # CrewAI tools (NetflixSearch, FilterCandidates, InspectCandidate, PosterLookup)
 ```
 
 ## Key architecture rules
@@ -73,6 +74,7 @@ app/
   - `WEB_ENRICHMENT_MAX_TITLES`
   - `WEB_ENRICHMENT_SEARCH_RESULTS`
   - `WEB_ENRICHMENT_TIMEOUT_SECONDS`
+  - `TMDB_API_KEY` (optional helper config for poster lookup experiments)
 
 ## Commands
 ```bash
@@ -107,6 +109,10 @@ pytest -v
   - text normalization
   - catalog search
   - search tools
+  - poster lookup tool + poster-aware conversation contracts
+  - poster/image lookup helpers (`image_search`, `tmdb_search`)
+  - finalizer poster merge into `StoredRecommendation.poster_url`
+  - chat CLI poster rendering fallback behavior
   - enrichment enricher (vibe detection, external signal detection)
   - enrichment reranking (maybe_enrich_search_output)
   - real web enrichment scoring (`enrich_titles`, provider failures, signal matching)

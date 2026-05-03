@@ -22,7 +22,7 @@ def test_feedback_updates_rejected_preference_memory(tmp_path, monkeypatch):
     service.store.save_session(memory)
 
     monkeypatch.setattr("app.conversation.service.run_searcher", lambda intent, last_tool_result=None: '{"selected": []}')
-    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: "refined")
+    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: {"message": "refined", "posters": []})
 
     service.handle_message(session.session_id, "слишком старое и слишком медленное")
     updated = service.load_session(session.session_id)
@@ -48,7 +48,7 @@ def test_recommendation_flow_persists_external_signal_history_and_accepted_prefe
         ),
     )
     monkeypatch.setattr("app.conversation.service.run_searcher", lambda intent, last_tool_result=None: '{"selected": []}')
-    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: "done")
+    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: {"message": "done", "posters": []})
 
     service.handle_message(session.session_id, "посоветуй сериал с вайбом 80-х и Вайноной Райдер")
     updated = service.load_session(session.session_id)
