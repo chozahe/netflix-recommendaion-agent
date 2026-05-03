@@ -16,3 +16,13 @@ def test_analyst_intent_accepts_hard_and_soft_constraints():
 
     assert intent.language == "ru"
     assert intent.soft_preferences["topics"] == ["space"]
+
+
+def test_analyst_intent_supports_confidence_and_external_signals():
+    intent = AnalystIntent(
+        query="сериал с вайбом 80-х",
+        confidence=0.72,
+        external_signals=["era:1980s", "vibe:mysterious"],
+    )
+    assert intent.confidence == 0.72
+    assert "era:1980s" in intent.external_signals

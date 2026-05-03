@@ -35,8 +35,9 @@
 - chat CLI с памятью сессии
 - FastAPI chat API
 - file-based session memory
-- feedback-aware refinement
-- bounded post-retrieval enrichment hooks
+- feedback-aware refinement with reusable preference memory
+- Analyst-led clarification with a maximum of 2 clarification turns
+- DB-first post-retrieval enrichment that only reranks verified CSV candidates
 - role-based model configuration через `.env`
 
 ---
@@ -82,8 +83,11 @@ Analyst — это LLM-агент **без инструментов**. Он по
 - `needs_clarification`
 - `clarification_question`
 - `missing_slots`
+- `confidence`
+- `external_signals`
+- `clarification_count`
 
-Если запрос слишком расплывчатый, Analyst может не запускать поиск сразу, а запросить уточнение. Если LLM-ответ пустой или невалидный — **минимальный fallback**: запрос передаётся Searcher как есть.
+Если запрос слишком расплывчатый, именно Analyst решает, нужен ли clarification. Локальный код больше не short-circuit'ит такие решения до Analyst. Если LLM-ответ пустой или невалидный — **минимальный fallback**: запрос передаётся Searcher как есть.
 
 ### 2. Searcher
 
@@ -108,8 +112,10 @@ Searcher может: выбрать route, перепробывать друго
 Новый слой над пайплайном управляет чатом:
 - создаёт сессии
 - хранит turns / shown_titles / rejected_titles
-- решает, нужен ли clarification turn
-- обрабатывает негативный feedback и запускает refinement
+- хранит `clarification_count`, accepted/rejected soft preferences и external signal history
+- применяет bounded clarification policy (не больше 2 уточнений до первой рекомендации)
+- если пользователь отвечает `любое / пофиг / не важно`, прекращает уточнения и сразу ищет
+- обрабатывает негативный feedback, обновляет preference memory и запускает refinement
 - отдаёт структурированный `ConversationResponse`
 
 ---
@@ -152,13 +158,13 @@ Searcher может: выбрать route, перепробывать друго
 ## Контракты между этапами
 
 ### `AnalystIntent`
-`query`, `content_type`, `hard_constraints`, `soft_preferences`, `topic_hypotheses`, `genre_hypotheses`, `mood_hypotheses`, `language`, `explanation`, `needs_clarification`, `clarification_question`, `missing_slots`
+`query`, `content_type`, `hard_constraints`, `soft_preferences`, `topic_hypotheses`, `genre_hypotheses`, `mood_hypotheses`, `language`, `explanation`, `needs_clarification`, `clarification_question`, `missing_slots`, `confidence`, `external_signals`, `clarification_count`
 
 ### `ConversationResponse`
 `type`, `session_id`, `message`, `recommendations`, `state`
 
 ### `SessionMemory`
-JSON-память сессии: `state`, `turns`, `shown_titles`, `rejected_titles`, `current_intent`, `last_recommendations`, `feedback_signals`
+JSON-память сессии: `session_id`, `state`, `turns`, `shown_titles`, `rejected_titles`, `current_intent`, `last_recommendations`, `feedback_signals`, `clarification_count`, `accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history`
 
 ### `Candidate`
 Тайтл + match_features (title_exact, description_overlap, listed_in_overlap, etc.)
@@ -355,10 +361,13 @@ uvicorn app.api.server:app --host 127.0.0.1 --port 8000
 
 ## Bounded enrichment
 
-Web enrichment пока опциональный и строго ограниченный:
+Web enrichment опциональный и строго ограниченный:
 - не запускается до CSV retrieval
+- работает только по top shortlisted DB candidates
 - максимум один enrichment pass
 - максимум 2-3 shortlisted titles
+- может валидировать era / actor / vibe-like external signals
+- **никогда не добавляет новые titles из web**, а только помогает rerank'ить уже найденные CSV-кандидаты
 - управляется feature flag'ом и timeout'ом
 
 ## Пример multi-turn диалога
@@ -370,6 +379,16 @@ User: фильм
 Agent: ... рекомендации ...
 User: это слишком старое
 Agent: Окей, давайте попробуем что-то поновее или ближе к вашим пожеланиям.
+```
+
+## Пример association-style запроса
+
+```text
+User: посоветуй сериал с вайбом 80-х и Вайноной Райдер
+Analyst: выделяет content_type=TV Show, confidence, external_signals вроде era:1980s / actor:winona_ryder / vibe:mysterious
+Searcher: ищет только по CSV каталогу и выбирает shortlist реальных Netflix titles
+Enrichment: при необходимости проверяет top DB candidates и rerank'ит их, не добавляя новые titles
+Finalizer: формирует ответ только из проверенного shortlist
 ```
 
 ## Мониторинг

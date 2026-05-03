@@ -26,5 +26,6 @@ Return **ONLY JSON** with these fields:
 4. If initial results are weak, retry with another route or lighter constraints.
 5. You may inspect top candidates before final selection.
 6. Optional web enrichment is allowed only after CSV retrieval, at most once, and for at most 2-3 shortlisted titles.
-7. Keep the final selection to the strongest verified candidates (max 5).
-8. Output only valid JSON.
+7. Web enrichment must never invent or introduce new titles; it may only validate or rerank titles already retrieved from the CSV catalog.
+8. Keep the final selection to the strongest verified candidates (max 5).
+9. Output only valid JSON.

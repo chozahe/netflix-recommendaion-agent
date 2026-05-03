@@ -1,6 +1,22 @@
 from app.contracts.analyst import AnalystIntent
 from app.memory.models import SessionMemory
 
+RELAXED_ANSWER_MARKERS = (
+    "любое",
+    "пофиг",
+    "не важно",
+    "anything is fine",
+    "anything works",
+    "doesn't matter",
+    "doesnt matter",
+)
+
+
+
+def is_relaxed_clarification_answer(message: str) -> bool:
+    text = message.lower()
+    return any(marker in text for marker in RELAXED_ANSWER_MARKERS)
+
 
 
 def merge_clarification_answer(memory: SessionMemory, message: str) -> AnalystIntent | None:
@@ -18,5 +34,6 @@ def merge_clarification_answer(memory: SessionMemory, message: str) -> AnalystIn
     intent.needs_clarification = False
     intent.clarification_question = None
     intent.missing_slots = []
+    intent.clarification_count = memory.clarification_count
     memory.current_intent = intent
     return intent

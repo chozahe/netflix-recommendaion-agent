@@ -14,3 +14,6 @@ class AnalystIntent(BaseModel):
     needs_clarification: bool = False
     clarification_question: str | None = None
     missing_slots: list[str] = Field(default_factory=list)
+    confidence: float = 1.0
+    external_signals: list[str] = Field(default_factory=list)
+    clarification_count: int = 0

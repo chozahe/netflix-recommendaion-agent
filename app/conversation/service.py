@@ -4,10 +4,15 @@ from pathlib import Path
 from app.contracts.analyst import AnalystIntent
 from app.contracts.conversation import ConversationResponse
 from app.contracts.feedback import FeedbackSignal
-from app.memory.merge import merge_clarification_answer
+from app.memory.merge import is_relaxed_clarification_answer, merge_clarification_answer
 from app.memory.models import ConversationTurn, SessionMemory, StoredRecommendation
 from app.memory.session_store import FileSessionStore
-from app.orchestration.pipeline import run_analyst, run_finalizer, run_searcher
+from app.orchestration.pipeline import (
+    maybe_enrich_search_output,
+    run_analyst,
+    run_finalizer,
+    run_searcher,
+)
 
 
 class ConversationService:
@@ -17,6 +22,27 @@ class ConversationService:
     @classmethod
     def for_tests(cls, sessions_dir: str | Path) -> "ConversationService":
         return cls(FileSessionStore(sessions_dir))
+
+    @staticmethod
+    def _append_memory_preference(target: dict, key: str, value: str) -> None:
+        current = list(target.get(key, []))
+        if value not in current:
+            current.append(value)
+        target[key] = current
+
+    @staticmethod
+    def _extend_unique_items(target: list[str], values: list[str]) -> None:
+        for value in values:
+            if value not in target:
+                target.append(value)
+
+    def _remember_intent_preferences(self, session: SessionMemory, intent: AnalystIntent) -> None:
+        for key, values in (intent.soft_preferences or {}).items():
+            if isinstance(values, list):
+                for value in values:
+                    if isinstance(value, str):
+                        self._append_memory_preference(session.accepted_soft_preferences, key, value)
+        self._extend_unique_items(session.external_signal_history, list(intent.external_signals or []))
 
     def start_session(self) -> SessionMemory:
         return self.store.create_session()
@@ -41,11 +67,46 @@ class ConversationService:
             return self._handle_feedback(session, message, feedback)
 
         if session.state == "awaiting_clarification":
+            prior_intent = session.current_intent
+            prior_missing_slots = list((prior_intent.missing_slots if prior_intent is not None else []) or [])
             merged_intent = merge_clarification_answer(session, message)
             if merged_intent is not None:
+                resolved_content_type = (
+                    prior_intent is not None
+                    and "content_type" in prior_missing_slots
+                    and merged_intent.content_type is not None
+                )
+                if (
+                    is_relaxed_clarification_answer(message)
+                    or session.clarification_count >= 2
+                    or resolved_content_type
+                ):
+                    return self._build_recommendation_response(
+                        session=session,
+                        intent=merged_intent,
+                        message=message,
+                        response_type="recommendations",
+                    )
+
+                refreshed_intent = run_analyst(merged_intent.query)
+                refreshed_intent.clarification_count = session.clarification_count
+                session.current_intent = refreshed_intent
+                if refreshed_intent.needs_clarification and session.clarification_count < 2:
+                    session.clarification_count += 1
+                    refreshed_intent.clarification_count = session.clarification_count
+                    session.state = "awaiting_clarification"
+                    self.store.save_session(session)
+                    return ConversationResponse(
+                        type="clarification",
+                        session_id=session.session_id,
+                        message=refreshed_intent.clarification_question or "Please clarify your request.",
+                        recommendations=[],
+                        state=session.state,
+                    )
+
                 return self._build_recommendation_response(
                     session=session,
-                    intent=merged_intent,
+                    intent=refreshed_intent,
                     message=message,
                     response_type="recommendations",
                 )
@@ -54,6 +115,8 @@ class ConversationService:
         session.current_intent = intent
 
         if intent.needs_clarification:
+            session.clarification_count += 1
+            intent.clarification_count = session.clarification_count
             session.state = "awaiting_clarification"
             self.store.save_session(session)
             return ConversationResponse(
@@ -123,15 +186,21 @@ class ConversationService:
         hard_constraints = dict(intent.hard_constraints or {})
         soft_preferences = dict(intent.soft_preferences or {})
 
-        if feedback.kind == "age" and feedback.value == "newer":
+        if "age:newer" in feedback.values or (feedback.kind == "age" and feedback.value == "newer"):
             hard_constraints["year_from"] = max(hard_constraints.get("year_from", 0), 2018)
-        elif feedback.kind == "pace" and feedback.value == "faster":
+            self._append_memory_preference(session.rejected_soft_preferences, "age", "old")
+        if "pace:faster" in feedback.values or (feedback.kind == "pace" and feedback.value == "faster"):
             soft_preferences["pace"] = ["fast"]
-        elif feedback.kind == "type":
+            self._append_memory_preference(session.rejected_soft_preferences, "pace", "slow")
+        if feedback.kind == "type":
             if "сериал" in (feedback.value or ""):
                 intent.content_type = "TV Show"
             elif "фильм" in (feedback.value or ""):
                 intent.content_type = "Movie"
+
+        for key, values in session.accepted_soft_preferences.items():
+            if key not in soft_preferences:
+                soft_preferences[key] = list(values)
 
         intent.hard_constraints = hard_constraints
         intent.soft_preferences = soft_preferences
@@ -149,10 +218,14 @@ class ConversationService:
         response_type: str,
     ) -> ConversationResponse:
         search_output = run_searcher(intent, last_tool_result={})
-        recommendations = self._extract_recommendations(search_output)
-        final_message = run_finalizer(message, intent, search_output)
+        enriched_output = maybe_enrich_search_output(intent, search_output)
+        serialized_output = json.dumps(enriched_output, ensure_ascii=False)
+        recommendations = self._extract_recommendations(serialized_output)
+        final_message = run_finalizer(message, intent, serialized_output)
+        self._remember_intent_preferences(session, intent)
         session.current_intent = intent
         session.last_recommendations = recommendations
+        intent.clarification_count = session.clarification_count
         session.shown_titles.extend(
             [item.title for item in recommendations if item.title not in session.shown_titles]
         )
@@ -186,10 +259,28 @@ class ConversationService:
         is_negative = any(token in text for token in ["отстой", "не", "слишком", "bad", "boring"])
         if not is_negative:
             return None
+
+        values: list[str] = []
+        kind = "generic_rejection"
+        value: str | None = None
+
         if "стар" in text or "old" in text:
-            return FeedbackSignal(kind="age", value="newer", requires_refinement=True)
+            values.append("age:newer")
+            kind = "age"
+            value = "newer"
         if "медлен" in text or "slow" in text:
-            return FeedbackSignal(kind="pace", value="faster", requires_refinement=True)
+            values.append("pace:faster")
+            if kind == "generic_rejection":
+                kind = "pace"
+                value = "faster"
         if "сериал" in text or "фильм" in text:
-            return FeedbackSignal(kind="type", value=text, requires_refinement=True)
-        return FeedbackSignal(kind="generic_rejection", value=None, requires_refinement=False)
+            if kind == "generic_rejection":
+                kind = "type"
+                value = text
+
+        return FeedbackSignal(
+            kind=kind,
+            value=value,
+            values=values,
+            requires_refinement=bool(values or kind == "type"),
+        )

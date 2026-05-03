@@ -12,12 +12,8 @@ from app.agents.definitions import (
 )
 from app.contracts.analyst import AnalystIntent
 from app.contracts.search import Candidate, SearchResult
-from app.conversation.clarification import (
-    build_clarification_question,
-    detect_missing_slots,
-    needs_clarification,
-)
 from app.monitoring import get_logger
+from app.search.enricher import enrich_shortlisted_titles
 from app.tools.netflix_search import NetflixSearchTool
 
 _logger = get_logger(__name__)
@@ -95,16 +91,6 @@ def build_searcher_input(intent: AnalystIntent, last_tool_result: dict) -> dict:
 
 
 def run_analyst(query: str) -> AnalystIntent:
-    if needs_clarification(query):
-        return AnalystIntent(
-            query=query,
-            language="ru" if re.search(r"[А-Яа-я]", query) else "en",
-            explanation="Query is too vague for direct search.",
-            needs_clarification=True,
-            clarification_question=build_clarification_question(query),
-            missing_slots=detect_missing_slots(query),
-        )
-
     analyst = build_analyst_agent()
     analyst_task = Task(
         description=(
@@ -112,7 +98,8 @@ def run_analyst(query: str) -> AnalystIntent:
             "Return ONLY strict JSON for the search intent with these fields: "
             "query, content_type, hard_constraints, soft_preferences, topic_hypotheses, "
             "genre_hypotheses, mood_hypotheses, language, explanation, "
-            "needs_clarification, clarification_question, missing_slots."
+            "needs_clarification, clarification_question, missing_slots, "
+            "confidence, external_signals, clarification_count."
         ),
         expected_output="A strict JSON object matching the AnalystIntent contract.",
         agent=analyst,
@@ -127,6 +114,46 @@ def run_analyst(query: str) -> AnalystIntent:
     except Exception as exc:
         _logger.warning("analyst_fallback_used", query=query, error=str(exc))
         return build_fallback_intent(query)
+
+
+
+def maybe_enrich_search_output(intent: AnalystIntent, search_output: str) -> dict:
+    try:
+        payload = json_module.loads(search_output)
+    except json_module.JSONDecodeError:
+        return {"selected": [], "discarded": [], "status": "invalid", "enrichment_used": False}
+
+    selected = payload.get("selected", [])
+    if not isinstance(selected, list) or not selected:
+        payload["enrichment_used"] = False
+        return payload
+
+    titles = [item.get("title") for item in selected if isinstance(item, dict) and item.get("title")]
+    enrichment = enrich_shortlisted_titles(
+        intent.query,
+        titles,
+        external_signals=intent.external_signals,
+    )
+    if not enrichment:
+        payload["enrichment_used"] = False
+        return payload
+
+    enrichment_by_title = {item.get("title"): item for item in enrichment if item.get("title")}
+
+    def _score(item: dict) -> int:
+        enriched = enrichment_by_title.get(item.get("title"), {})
+        return int(enriched.get("confidence_boost", 0))
+
+    reranked = sorted(selected, key=_score, reverse=True)
+    for item in reranked:
+        enriched = enrichment_by_title.get(item.get("title"))
+        if enriched:
+            item["matched_external_signals"] = enriched.get("matched_external_signals", [])
+            item["confidence_boost"] = enriched.get("confidence_boost", 0)
+
+    payload["selected"] = reranked
+    payload["enrichment_used"] = True
+    return payload
 
 
 
@@ -182,4 +209,9 @@ def run_pipeline(query: str) -> str:
     if intent.needs_clarification:
         return intent.clarification_question or "Please clarify your request."
     search_output = run_searcher(intent=intent, last_tool_result={})
-    return run_finalizer(query=query, intent=intent, search_output=search_output)
+    enriched_output = maybe_enrich_search_output(intent, search_output)
+    return run_finalizer(
+        query=query,
+        intent=intent,
+        search_output=json_module.dumps(enriched_output, ensure_ascii=False),
+    )

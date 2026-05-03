@@ -12,7 +12,7 @@ def test_clarification_flow_smoke(tmp_path):
     service = ConversationService.for_tests(tmp_path)
     session = service.start_session()
 
-    response = service.handle_message(session.session_id, "хочу что-нибудь мрачное")
+    response = service.handle_message(session.session_id, "посоветуй")
 
     assert response.type == "clarification"
     assert response.state == "awaiting_clarification"
@@ -26,7 +26,7 @@ def test_chat_api_happy_path_smoke():
         "/chat",
         json={
             "session_id": session["session_id"],
-            "message": "хочу что-нибудь мрачное",
+            "message": "посоветуй",
         },
     )
 
