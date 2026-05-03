@@ -1,5 +1,6 @@
 import logging
 import re
+import shutil
 from pathlib import Path
 from typing import Optional
 
@@ -16,11 +17,12 @@ class NetflixVectorStore:
 
     At startup, scans all Markdown files in kb/, chunks them by heading
     boundaries, embeds with sentence-transformers, and stores in a
-    persistent ChromaDB collection.  Supports ``query(text)`` for
+    persistent ChromaDB collection. Supports ``query(text)`` for
     cosine-similarity lookups.
 
-    The collection is rebuilt from scratch on every instantiation because
-    the design requires a restart to pick up KB changes (no hot-reload).
+    The local Chroma directory is treated as a rebuildable cache. If the
+    persistent state is unreadable or stale, it is deleted and rebuilt from
+    ``kb/*.md``.
     """
 
     COLLECTION_NAME = "netflix_knowledge"
@@ -34,9 +36,9 @@ class NetflixVectorStore:
         chroma_path: Optional[str] = None,
     ) -> None:
         kb_path = Path(kb_path or settings.kb_path)
-        chroma_path = chroma_path or settings.chroma_path
+        chroma_path = Path(chroma_path or settings.chroma_path)
 
-        client = chromadb.PersistentClient(path=str(chroma_path))
+        client = self._create_healthy_client(chroma_path)
         ef = embedding_functions.SentenceTransformerEmbeddingFunction(
             model_name=self.EMBEDDING_MODEL,
         )
@@ -66,6 +68,19 @@ class NetflixVectorStore:
         else:
             logger.warning("NetflixVectorStore: no kb/*.md files found — collection is empty")
 
+    @classmethod
+    def _create_healthy_client(cls, chroma_path: Path):
+        chroma_path.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(path=str(chroma_path))
+        try:
+            client.list_collections()
+            return client
+        except Exception as exc:
+            logger.warning("Repairing broken Chroma cache at %s: %s", chroma_path, exc)
+            shutil.rmtree(chroma_path, ignore_errors=True)
+            chroma_path.mkdir(parents=True, exist_ok=True)
+            return chromadb.PersistentClient(path=str(chroma_path))
+
     # ------------------------------------------------------------------
     # Query entry point
     # ------------------------------------------------------------------
@@ -80,7 +95,6 @@ class NetflixVectorStore:
         )
 
         formatted: list[dict] = []
-        # ChromaDB returns lists-of-lists for the three include keys
         docs = results["documents"] or [[]]
         metas = results["metadatas"] or [[]]
         dists = results["distances"] or [[]]
@@ -100,9 +114,6 @@ class NetflixVectorStore:
     def count(self) -> int:
         return self._collection.count()
 
-    # ------------------------------------------------------------------
-    # File loading & chunking
-    # ------------------------------------------------------------------
     @staticmethod
     def _load_kb_files(kb_path: Path) -> tuple[list[str], list[dict], list[str]]:
         documents: list[str] = []
@@ -131,14 +142,11 @@ class NetflixVectorStore:
     @staticmethod
     def _chunk_markdown(content: str, filename: str) -> list[dict]:
         chunks: list[dict] = []
-        # Split on "## ..." or "### ..." at line start (but not "# ..." which is the file title)
         sections = re.split(r"\n(?=#{2,3}\s)", content)
-        # The first "section" is everything before the first heading
-        # Skip it if it's just the file-level title / intro
         first_section_offset = 1 if sections[0].strip().startswith("# ") else 0
 
         chunk_index = 0
-        for i, section in enumerate(sections[first_section_offset:]):
+        for section in sections[first_section_offset:]:
             section = section.strip()
             if not section:
                 continue
@@ -150,16 +158,12 @@ class NetflixVectorStore:
                 "section": heading_line,
             }
 
-            # Detect table: 3+ lines starting with |
             table_rows = [
                 ln.strip() for ln in body.split("\n")
                 if ln.strip().startswith("|") and ln.strip().endswith("|")
                 and not re.match(r"^\|[\s\-:]+\|", ln.strip())
             ]
-            # Skip the header row (first data-style row before separator)
-            # Keep only data rows
             if len(table_rows) >= 3:
-                # table_rows[0] is column header, rest are data
                 header_row = table_rows[0]
                 data_rows = table_rows[1:]
                 for j, row in enumerate(data_rows):
