@@ -60,6 +60,8 @@ class Settings(BaseModel):
     sessions_dir: str = os.getenv("SESSIONS_DIR", "memory/sessions")
 
     metrics_port: int = env_int("METRICS_PORT", 8001)
+    api_host: str = os.getenv("API_HOST", "127.0.0.1")
+    api_port: int = env_int("API_PORT", 8000)
     log_file: str = os.getenv("LOG_FILE", "logs/app.log")
 
 
