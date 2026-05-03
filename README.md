@@ -322,7 +322,9 @@ METRICS_PORT=8001
 API_HOST=127.0.0.1
 API_PORT=8000
 WEB_ENRICHMENT_ENABLED=true
+WEB_ENRICHMENT_PROVIDER=duckduckgo
 WEB_ENRICHMENT_MAX_TITLES=3
+WEB_ENRICHMENT_SEARCH_RESULTS=5
 WEB_ENRICHMENT_TIMEOUT_SECONDS=5
 LOG_FILE=logs/app.log
 ```
@@ -366,9 +368,12 @@ Web enrichment опциональный и строго ограниченный
 - работает только по top shortlisted DB candidates
 - максимум один enrichment pass
 - максимум 2-3 shortlisted titles
+- по умолчанию использует бесплатный no-key provider `duckduckgo`
+- оценивает только bounded search-result snippets/titles на первом этапе
 - может валидировать era / actor / vibe-like external signals
 - **никогда не добавляет новые titles из web**, а только помогает rerank'ить уже найденные CSV-кандидаты
-- управляется feature flag'ом и timeout'ом
+- при timeout / provider failure мягко деградирует к `no enrichment`
+- управляется feature flag'ом, provider config и timeout'ом
 
 ## Пример multi-turn диалога
 
@@ -387,7 +392,7 @@ Agent: Окей, давайте попробуем что-то поновее и
 User: посоветуй сериал с вайбом 80-х и Вайноной Райдер
 Analyst: выделяет content_type=TV Show, confidence, external_signals вроде era:1980s / actor:winona_ryder / vibe:mysterious
 Searcher: ищет только по CSV каталогу и выбирает shortlist реальных Netflix titles
-Enrichment: при необходимости проверяет top DB candidates и rerank'ит их, не добавляя новые titles
+Enrichment: при необходимости делает bounded DuckDuckGo search по top DB candidates, проверяет snippets на era/actor/vibe сигналы и rerank'ит shortlist, не добавляя новые titles
 Finalizer: формирует ответ только из проверенного shortlist
 ```
 

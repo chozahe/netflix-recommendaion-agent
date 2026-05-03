@@ -8,7 +8,7 @@
 ## Current architecture
 - 3-agent linear pipeline: **Analyst** → **Searcher** → **Finalizer**, wrapped in **ConversationService** for multi-turn dialog.
 - Analyst-led clarification: analyst decides when clarification is needed (max 2 turns), with relaxed-answer detection (`любое / пофиг / не важно`).
-- Bounded DB-first enrichment: optional post-retrieval reranking of CSV candidates via external signals, never inventing new titles.
+- Bounded DB-first enrichment: optional post-retrieval reranking of CSV candidates via external signals and bounded DuckDuckGo search snippets, never inventing new titles.
 - Session memory with accumulating preference memory (`accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history`).
 - Orchestration framework: [CrewAI](https://docs.crewai.com/) with Tools.
 - Local-first runtime — **no Docker support**.
@@ -36,7 +36,7 @@ app/
 ├── monitoring/       # structlog + Prometheus metrics
 ├── orchestration/    # Pipeline wiring + maybe_enrich_search_output + fallbacks
 ├── runtime/          # Local runtime bootstrap
-├── search/           # Catalog retrieval + enricher + web_search stub
+├── search/           # Catalog retrieval + enricher + real bounded web_search adapter
 └── tools/            # CrewAI tools (NetflixSearch, FilterCandidates, InspectCandidate)
 ```
 
@@ -46,11 +46,12 @@ app/
 3. **Searcher must use tools against the real CSV** — never invent titles.
 4. **Finalizer must only use verified Searcher output**.
 5. **Enrichment is DB-first** — only reranks existing CSV candidates, never adds new titles from the web.
-6. **Clarification is bounded** — max 2 turns; relaxed answers (`любое / пофиг / не важно`) stop clarifying immediately.
-7. **Preference memory accumulates** — `accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history` persist across session turns.
-8. **Searcher is bounded** — use small `max_iter` and fallbacks to avoid long loops.
-9. **Deterministic fallbacks are allowed** when agent output is empty or invalid.
-10. **Local CLI is the primary workflow** — optimize for fast iterative runs, not container deployment.
+6. **Web enrichment is bounded** — default provider is free no-key DuckDuckGo search over a small number of snippets/results.
+7. **Clarification is bounded** — max 2 turns; relaxed answers (`любое / пофиг / не важно`) stop clarifying immediately.
+8. **Preference memory accumulates** — `accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history` persist across session turns.
+9. **Searcher is bounded** — use small `max_iter` and fallbacks to avoid long loops.
+10. **Deterministic fallbacks are allowed** when agent output is empty or invalid.
+11. **Local CLI is the primary workflow** — optimize for fast iterative runs, not container deployment.
 
 ## Model/runtime conventions
 - `OPENAI_BASE_URL` defaults to `https://opencode.ai/zen/go/v1`.
@@ -67,6 +68,11 @@ app/
   - `ANALYST_MAX_ITER`
   - `SEARCHER_MAX_ITER`
   - `FINALIZER_MAX_ITER`
+  - `WEB_ENRICHMENT_ENABLED`
+  - `WEB_ENRICHMENT_PROVIDER`
+  - `WEB_ENRICHMENT_MAX_TITLES`
+  - `WEB_ENRICHMENT_SEARCH_RESULTS`
+  - `WEB_ENRICHMENT_TIMEOUT_SECONDS`
 
 ## Commands
 ```bash
@@ -103,6 +109,7 @@ pytest -v
   - search tools
   - enrichment enricher (vibe detection, external signal detection)
   - enrichment reranking (maybe_enrich_search_output)
+  - real web enrichment scoring (`enrich_titles`, provider failures, signal matching)
   - analyst-led clarification policy (no local short-circuit)
   - clarification limits (max 2 turns, relaxed-answer detection)
   - feedback preference updates (rejected preferences memory)
