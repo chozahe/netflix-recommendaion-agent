@@ -192,23 +192,31 @@ def run_searcher(intent: AnalystIntent, last_tool_result: dict | None = None) ->
 
 
 
-def run_finalizer(query: str, intent: AnalystIntent, search_output: str) -> str:
+def run_finalizer(query: str, intent: AnalystIntent, search_output: str) -> dict:
     finalizer = build_finalizer_agent()
     finalizer_task = Task(
         description=(
             f"Original user query: {query}\n\n"
             f"Analyst intent explanation: {intent.explanation}\n\n"
             f"Searcher output:\n{search_output}\n\n"
-            "Write a friendly final recommendation in the user's language. Do not invent facts."
+            "Use the PosterLookup tool to fetch poster URLs for verified titles you recommend. "
+            "Return ONLY strict JSON with fields: message, posters."
         ),
-        expected_output="A conversational recommendation message in natural language.",
+        expected_output="A strict JSON object with fields: message (string), posters (array of {title, poster_url}).",
         agent=finalizer,
     )
     final_crew = Crew(agents=[finalizer], tasks=[finalizer_task], process=Process.sequential)
     _logger.info("finalizer_started", query=query)
-    result = str(final_crew.kickoff())
+    raw = str(final_crew.kickoff())
     _logger.info("finalizer_finished")
-    return result
+    try:
+        parsed = json_module.loads(_extract_json(raw))
+        return {
+            "message": parsed.get("message", raw),
+            "posters": parsed.get("posters", []),
+        }
+    except Exception:
+        return {"message": raw, "posters": []}
 
 
 
@@ -218,8 +226,9 @@ def run_pipeline(query: str) -> str:
         return intent.clarification_question or "Please clarify your request."
     search_output = run_searcher(intent=intent, last_tool_result={})
     enriched_output = maybe_enrich_search_output(intent, search_output)
-    return run_finalizer(
+    result = run_finalizer(
         query=query,
         intent=intent,
         search_output=json_module.dumps(enriched_output, ensure_ascii=False),
     )
+    return result.get("message", "")

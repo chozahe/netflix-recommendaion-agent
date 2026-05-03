@@ -221,7 +221,9 @@ class ConversationService:
         enriched_output = maybe_enrich_search_output(intent, search_output)
         serialized_output = json.dumps(enriched_output, ensure_ascii=False)
         recommendations = self._extract_recommendations(serialized_output)
-        final_message = run_finalizer(message, intent, serialized_output)
+        finalizer_output = run_finalizer(message, intent, serialized_output)
+        final_message = finalizer_output.get("message", "")
+        recommendations = self._merge_posters(recommendations, finalizer_output.get("posters", []))
         self._remember_intent_preferences(session, intent)
         session.current_intent = intent
         session.last_recommendations = recommendations
@@ -238,6 +240,17 @@ class ConversationService:
             recommendations=recommendations,
             state=session.state,
         )
+
+    @staticmethod
+    def _merge_posters(
+        recommendations: list[StoredRecommendation],
+        posters: list[dict],
+    ) -> list[StoredRecommendation]:
+        by_title = {p["title"]: p.get("poster_url") for p in posters if isinstance(p, dict) and "title" in p}
+        for rec in recommendations:
+            if rec.title in by_title:
+                rec.poster_url = by_title[rec.title]
+        return recommendations
 
     def _extract_recommendations(self, search_output: str) -> list[StoredRecommendation]:
         try:

@@ -7,6 +7,7 @@ from app.tools import (
     FilterCandidatesTool,
     InspectCandidateTool,
     NetflixSearchTool,
+    PosterLookupTool,
 )
 
 
@@ -47,7 +48,7 @@ def build_finalizer_agent() -> Agent:
         role="Recommendation Finalizer",
         goal="Craft warm, personalized recommendations from verified search results",
         backstory=FINALIZER_PROMPT,
-        tools=[],
+        tools=[PosterLookupTool()],
         llm=create_finalizer_llm(),
         verbose=settings.agents_verbose,
         allow_delegation=False,

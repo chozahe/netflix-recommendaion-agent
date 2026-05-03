@@ -19,7 +19,10 @@ def test_anything_is_fine_stops_further_clarification(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr("app.conversation.service.run_searcher", lambda intent, last_tool_result=None: '{"selected": []}')
-    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: "done")
+    monkeypatch.setattr(
+        "app.conversation.service.run_finalizer",
+        lambda message, intent, search_output: {"message": "done", "posters": []},
+    )
 
     service.handle_message(session.session_id, "хочу детективный сериал на вечер")
     response = service.handle_message(session.session_id, "да любое сойдет")
@@ -46,7 +49,10 @@ def test_clarification_is_capped_at_two_turns(tmp_path, monkeypatch):
         ),
     )
     monkeypatch.setattr("app.conversation.service.run_searcher", lambda intent, last_tool_result=None: '{"selected": []}')
-    monkeypatch.setattr("app.conversation.service.run_finalizer", lambda message, intent, search_output: "done")
+    monkeypatch.setattr(
+        "app.conversation.service.run_finalizer",
+        lambda message, intent, search_output: {"message": "done", "posters": []},
+    )
 
     first = service.handle_message(session.session_id, "хочу что-нибудь")
     second = service.handle_message(session.session_id, "не знаю")
