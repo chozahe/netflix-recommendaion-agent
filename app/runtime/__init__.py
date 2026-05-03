@@ -1,0 +1,3 @@
+from app.runtime.bootstrap import ensure_runtime_ready
+
+__all__ = ["ensure_runtime_ready"]

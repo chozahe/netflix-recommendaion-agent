@@ -12,50 +12,43 @@
 
 Каждый агент использует свою модель и параметры из `.env`.
 
----
-
 ## LLM API
 
 Используется OpenAI-compatible API через OpenCode Go.
 
 ```env
 OPENAI_BASE_URL=https://opencode.ai/zen/go/v1
-
-ANALYST_MODEL=glm-5.1
-SEARCH_MODEL=glm-5.1
-FINALIZER_MODEL=glm-5.1
+ANALYST_MODEL=qwen3.5-plus
+SEARCH_MODEL=deepseek-v4-pro
+FINALIZER_MODEL=deepseek-v4-flash
 ```
+
 ## Система памяти
 
 Используется семантическая база знаний на ChromaDB.
-В неё загружаются markdown-файлы из папки kb.
+В неё загружаются markdown-файлы из папки `kb`.
 
-## Запуск
-```Bash
+## Локальный запуск
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 cp .env.example .env
-docker compose up --build
+python -m app.main "хочу фильм про космос"
 ```
 
-## Проверка пользователя контейнера
-```Bash
-docker compose run --rm netflix-agent whoami
-```
-
-Ожидаемый результат:
-
-```Bash
-appuser
-```
 ## Метрики
 
 После запуска доступны метрики Prometheus:
 
-```
+```text
 http://localhost:8001/metrics
 ```
+
 ## Структура проекта
 
-```
+```text
 app/
 ├── tools/
 ├── knowledge/
@@ -72,7 +65,8 @@ chroma_db/
 ```
 
 ## Evals
-```
+
+```bash
 python -m app.evals.run_evals
 ```
 

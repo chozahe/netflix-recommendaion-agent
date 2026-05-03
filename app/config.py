@@ -41,9 +41,9 @@ class Settings(BaseModel):
         "https://opencode.ai/zen/go/v1",
     )
 
-    analyst_model: str = os.getenv("ANALYST_MODEL", "glm-5.1")
-    search_model: str = os.getenv("SEARCH_MODEL", "glm-5.1")
-    finalizer_model: str = os.getenv("FINALIZER_MODEL", "glm-5.1")
+    analyst_model: str = os.getenv("ANALYST_MODEL", "qwen3.5-plus")
+    search_model: str = os.getenv("SEARCH_MODEL", "deepseek-v4-pro")
+    finalizer_model: str = os.getenv("FINALIZER_MODEL", "deepseek-v4-flash")
 
     analyst_temperature: float = env_float("ANALYST_TEMPERATURE", 0.1)
     search_temperature: float = env_float("SEARCH_TEMPERATURE", 0.0)
