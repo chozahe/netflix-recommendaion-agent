@@ -7,8 +7,6 @@ from langchain_openai import ChatOpenAI
 from app.config import settings
 
 ANTHROPIC_STYLE_MODELS = {
-    "deepseek-v4-flash",
-    "deepseek-v4-pro",
     "minimax-m2.5",
     "minimax-m2.7",
 }
