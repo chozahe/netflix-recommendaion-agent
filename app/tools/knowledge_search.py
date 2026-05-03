@@ -21,7 +21,7 @@ class KnowledgeSearchInput(BaseModel):
 class KnowledgeSearchTool(BaseTool):
     name: str = "KnowledgeSearch"
     description: str = (
-        "Search the Netflix knowledge base for genre mappings, rating definitions, "
+        "Search the Netflix knowledges for genre mappings, rating definitions, "
         "country popularity data, mood keywords, and recommendation safety rules. "
         "Use this when you need to look up which Netflix genre corresponds to a "
         "user theme (e.g. 'space' → 'Sci-Fi & Fantasy'), which ratings are safe "
