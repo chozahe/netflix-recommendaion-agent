@@ -139,6 +139,13 @@ def maybe_enrich_search_output(intent: AnalystIntent, search_output: str) -> dic
         return payload
 
     enrichment_by_title = {item.get("title"): item for item in enrichment if item.get("title")}
+    has_positive_match = any(
+        int(item.get("confidence_boost", 0)) > 0 or item.get("matched_external_signals")
+        for item in enrichment_by_title.values()
+    )
+    if not has_positive_match:
+        payload["enrichment_used"] = False
+        return payload
 
     def _score(item: dict) -> int:
         enriched = enrichment_by_title.get(item.get("title"), {})
@@ -150,6 +157,7 @@ def maybe_enrich_search_output(intent: AnalystIntent, search_output: str) -> dic
         if enriched:
             item["matched_external_signals"] = enriched.get("matched_external_signals", [])
             item["confidence_boost"] = enriched.get("confidence_boost", 0)
+            item["enrichment_evidence"] = enriched.get("evidence", [])
 
     payload["selected"] = reranked
     payload["enrichment_used"] = True

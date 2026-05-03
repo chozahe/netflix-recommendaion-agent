@@ -63,7 +63,9 @@ class Settings(BaseModel):
     api_host: str = os.getenv("API_HOST", "127.0.0.1")
     api_port: int = env_int("API_PORT", 8000)
     web_enrichment_enabled: bool = env_bool("WEB_ENRICHMENT_ENABLED", True)
+    web_enrichment_provider: str = os.getenv("WEB_ENRICHMENT_PROVIDER", "duckduckgo")
     web_enrichment_max_titles: int = env_int("WEB_ENRICHMENT_MAX_TITLES", 3)
+    web_enrichment_search_results: int = env_int("WEB_ENRICHMENT_SEARCH_RESULTS", 5)
     web_enrichment_timeout_seconds: int = env_int("WEB_ENRICHMENT_TIMEOUT_SECONDS", 5)
     log_file: str = os.getenv("LOG_FILE", "logs/app.log")
 
