@@ -11,7 +11,9 @@ from app.agents.definitions import (
     build_searcher_agent,
 )
 from app.contracts.analyst import AnalystIntent
+from app.contracts.search import Candidate, SearchResult
 from app.monitoring import get_logger
+from app.tools.netflix_search import NetflixSearchTool
 from app.tools.preference_extractor import PreferenceExtractorTool
 
 _logger = get_logger(__name__)
@@ -53,6 +55,38 @@ def build_fallback_intent(query: str) -> AnalystIntent:
         mood_hypotheses=list((raw.get("moods") or {}).keys()),
         language="ru" if re.search(r"[А-Яа-я]", query) else "en",
         explanation=raw.get("reasoning", "Fallback intent from PreferenceExtractor"),
+    )
+
+
+
+def build_fallback_search_result(intent: AnalystIntent) -> SearchResult:
+    tool = NetflixSearchTool()
+    hard = intent.hard_constraints or {}
+    payload = json_module.loads(
+        tool._run(
+            content_type=intent.content_type,
+            year_from=hard.get("year_from"),
+            year_to=hard.get("year_to"),
+            country=hard.get("country"),
+            rating=hard.get("rating"),
+            text_query=intent.query,
+            mode="title" if len(intent.query.split()) <= 2 else "hybrid",
+            limit=10,
+        )
+    )
+    candidates = [Candidate.model_validate(row) for row in payload.get("results", [])]
+    if not candidates:
+        return SearchResult(
+            status="no_results",
+            selected=[],
+            discarded=[],
+            explanation="Fallback search found no verified catalog matches.",
+        )
+    return SearchResult(
+        status="ok",
+        selected=candidates[:5],
+        discarded=candidates[5:],
+        explanation="Fallback search selected verified candidates from NetflixSearch.",
     )
 
 
@@ -118,8 +152,12 @@ def run_pipeline(query: str) -> str:
         process=Process.sequential,
     )
     _logger.info("searcher_started", query=query)
-    search_output = str(search_crew.kickoff())
-    _logger.info("searcher_finished")
+    try:
+        search_output = str(search_crew.kickoff())
+        _logger.info("searcher_finished")
+    except Exception as exc:
+        _logger.warning("searcher_fallback_used", query=query, error=str(exc))
+        search_output = build_fallback_search_result(intent).model_dump_json(ensure_ascii=False)
 
     finalizer_task = Task(
         description=(
