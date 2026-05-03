@@ -6,6 +6,7 @@ from app.orchestration import run_pipeline
 
 EVAL_QUERIES = [
     "что-нибудь мрачное про космос",
+    "хочу что-нибудь мрачное",
     "interstellar",
     "легкий сериал на вечер",
 ]

@@ -1,6 +1,6 @@
 # Netflix Recommendation Agent
 
-Локальная мультиагентная система рекомендаций контента Netflix с **agentic search**: пользовательский запрос сначала превращается в структурированный intent, затем проверяется через реальные данные Netflix, а в конце оформляется в дружелюбный ответ.
+Локальная мультиагентная система рекомендаций контента Netflix с **agentic search** и новым **AI-first chat flow**: система умеет не только отвечать на один запрос, но и вести многоходовый диалог с уточнениями, памятью сессии и refinement после негативного фидбека.
 
 ---
 
@@ -32,6 +32,11 @@
   - `interstellar`
   - `stranger things`
 - локальные evals и тесты
+- chat CLI с памятью сессии
+- FastAPI chat API
+- file-based session memory
+- feedback-aware refinement
+- bounded post-retrieval enrichment hooks
 - role-based model configuration через `.env`
 
 ---
@@ -41,7 +46,12 @@
 ### Общая схема
 
 ```text
-User Query
+User Message
+   ↓
+ConversationService
+   ├─ session memory (JSON files)
+   ├─ turn classification
+   ├─ clarification / refinement handling
    ↓
 Analyst (LLM-only, без tools)
    ↓
@@ -53,7 +63,7 @@ SearchResult (verified candidates)
    ↓
 Finalizer (без tools)
    ↓
-User-facing answer
+ConversationResponse / one-shot answer
 ```
 
 ### 1. Analyst
@@ -69,8 +79,11 @@ Analyst — это LLM-агент **без инструментов**. Он по
 - `genre_hypotheses`, `mood_hypotheses`, `topic_hypotheses`
 - `language` (ru / en)
 - `explanation`
+- `needs_clarification`
+- `clarification_question`
+- `missing_slots`
 
-Если LLM-ответ пустой или невалидный — **минимальный fallback**: запрос передаётся Searcher как есть.
+Если запрос слишком расплывчатый, Analyst может не запускать поиск сразу, а запросить уточнение. Если LLM-ответ пустой или невалидный — **минимальный fallback**: запрос передаётся Searcher как есть.
 
 ### 2. Searcher
 
@@ -89,6 +102,15 @@ Searcher может: выбрать route, перепробывать друго
 ### 3. Finalizer
 
 Получает проверенные данные от Searcher и пишет дружелюбный ответ. Не добавляет фактов, которых нет в Searcher output.
+
+### 4. Conversation service
+
+Новый слой над пайплайном управляет чатом:
+- создаёт сессии
+- хранит turns / shown_titles / rejected_titles
+- решает, нужен ли clarification turn
+- обрабатывает негативный feedback и запускает refinement
+- отдаёт структурированный `ConversationResponse`
 
 ---
 
@@ -130,7 +152,13 @@ Searcher может: выбрать route, перепробывать друго
 ## Контракты между этапами
 
 ### `AnalystIntent`
-`query`, `content_type`, `hard_constraints`, `soft_preferences`, `topic_hypotheses`, `genre_hypotheses`, `mood_hypotheses`, `language`, `explanation`
+`query`, `content_type`, `hard_constraints`, `soft_preferences`, `topic_hypotheses`, `genre_hypotheses`, `mood_hypotheses`, `language`, `explanation`, `needs_clarification`, `clarification_question`, `missing_slots`
+
+### `ConversationResponse`
+`type`, `session_id`, `message`, `recommendations`, `state`
+
+### `SessionMemory`
+JSON-память сессии: `state`, `turns`, `shown_titles`, `rejected_titles`, `current_intent`, `last_recommendations`, `feedback_signals`
 
 ### `Candidate`
 Тайтл + match_features (title_exact, description_overlap, listed_in_overlap, etc.)
@@ -197,19 +225,29 @@ FINALIZER_MODEL=openai/deepseek-v4-flash
 ```text
 app/
 ├── agents/           # Сборка агентов и загрузка prompt'ов
+├── api/              # FastAPI chat API
+├── chat/             # Interactive CLI chat
 ├── contracts/        # Pydantic-схемы между этапами
+├── conversation/     # Clarification / classifier / service
 ├── evals/            # Local eval runner
 ├── llm/              # Universal provider routing
+├── memory/           # Session models + file store
 ├── monitoring/       # structlog + prometheus
 ├── orchestration/    # Pipeline wiring + fallbacks
 ├── runtime/          # Local bootstrap (логи)
-├── search/           # Catalog retrieval + text normalization
+├── search/           # Catalog retrieval + text normalization + enrichment hooks
 ├── tools/            # CrewAI tools (3 шт.)
+├── chat_main.py      # Chat CLI entrypoint
 ├── config.py         # Настройки из .env
-└── main.py           # CLI entrypoint
+└── main.py           # One-shot CLI entrypoint
 
 data/
 ├── netflix_titles.csv
+
+knowledge/
+├── clarification_policy.md
+├── enrichment_policy.md
+└── feedback_policy.md
 
 prompts/
 ├── analyst.md
@@ -218,9 +256,13 @@ prompts/
 
 tests/
 ├── agents/
+├── api/
+├── chat/
 ├── contracts/
+├── conversation/
 ├── evals/
 ├── llm/
+├── memory/
 ├── runtime/
 ├── search/
 └── tools/
@@ -237,7 +279,11 @@ pip install -r requirements.txt
 cp .env.example .env
 # отредактировать .env: вставить OPENAI_API_KEY
 
+# one-shot CLI
 python -m app.main "что-нибудь мрачное про космос"
+
+# chat CLI
+python -m app.chat_main
 ```
 
 ---
@@ -264,8 +310,14 @@ FINALIZER_MAX_ITER=2
 AGENTS_VERBOSE=true
 
 NETFLIX_CSV_PATH=data/netflix_titles.csv
+SESSIONS_DIR=memory/sessions
 
 METRICS_PORT=8001
+API_HOST=127.0.0.1
+API_PORT=8000
+WEB_ENRICHMENT_ENABLED=true
+WEB_ENRICHMENT_MAX_TITLES=3
+WEB_ENRICHMENT_TIMEOUT_SECONDS=5
 LOG_FILE=logs/app.log
 ```
 
@@ -275,10 +327,50 @@ LOG_FILE=logs/app.log
 
 ```bash
 pytest -v                         # все тесты
-python -m app.evals.run_evals     # ручная проверка качества
+python -m app.evals.run_evals     # one-shot + clarification smoke
+python -m app.chat_main           # interactive chat
 ```
 
 ---
+
+## API
+
+### Endpoints
+
+- `POST /sessions` — создать chat session
+- `POST /chat` — отправить сообщение в сессию
+- `GET /sessions/{session_id}` — посмотреть состояние сессии
+- `DELETE /sessions/{session_id}` — удалить сессию
+
+Пример запуска:
+
+```bash
+uvicorn app.api.server:app --host 127.0.0.1 --port 8000
+```
+
+## Session memory
+
+Сессии хранятся как локальные JSON-файлы в `memory/sessions/` (или в `SESSIONS_DIR`).
+Это даёт простой локальный state без внешней БД.
+
+## Bounded enrichment
+
+Web enrichment пока опциональный и строго ограниченный:
+- не запускается до CSV retrieval
+- максимум один enrichment pass
+- максимум 2-3 shortlisted titles
+- управляется feature flag'ом и timeout'ом
+
+## Пример multi-turn диалога
+
+```text
+User: хочу что-нибудь мрачное
+Agent: Это должен быть фильм или сериал?
+User: фильм
+Agent: ... рекомендации ...
+User: это слишком старое
+Agent: Окей, давайте попробуем что-то поновее или ближе к вашим пожеланиям.
+```
 
 ## Мониторинг
 
@@ -289,11 +381,15 @@ python -m app.evals.run_evals     # ручная проверка качеств
 
 ## Что покрыто тестами
 
-- contracts (AnalystIntent, SearchResult, Candidate)
+- contracts (AnalystIntent, ConversationResponse, SearchResult, Candidate)
 - runtime bootstrap
 - text normalization
 - catalog search (title, description routes)
 - search tools (FilterCandidates)
+- conversation classifier / clarification / session store
+- chat API happy path
+- feedback refinement smoke flow
+- one-shot CLI compatibility
 - LLM backend routing (openai/anthropic classification)
 - timeouts / guardrails
 - orchestration helpers (build_searcher_input)

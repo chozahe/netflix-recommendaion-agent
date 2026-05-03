@@ -1,5 +1,4 @@
 from app.conversation.classifier import classify_turn
-from app.conversation.service import ConversationService
 from app.conversation.state_machine import (
     AWAITING_CLARIFICATION,
     IDLE,
@@ -15,3 +14,11 @@ __all__ = [
     "RECOMMENDED",
     "REFINING",
 ]
+
+
+def __getattr__(name: str):
+    if name == "ConversationService":
+        from app.conversation.service import ConversationService
+
+        return ConversationService
+    raise AttributeError(name)

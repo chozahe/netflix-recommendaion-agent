@@ -31,6 +31,7 @@ def main() -> None:
     if len(sys.argv) < 2:
         print("Usage: python -m app.main 'Your Netflix query here'")
         print('Example: python -m app.main "хочу фильм про космос"')
+        print('Chat mode: python -m app.chat_main')
         sys.exit(0)
 
     query = " ".join(sys.argv[1:])
