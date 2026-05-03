@@ -1,4 +1,5 @@
 import json
+import time
 from pathlib import Path
 
 from app.contracts.analyst import AnalystIntent
@@ -7,12 +8,15 @@ from app.contracts.feedback import FeedbackSignal
 from app.memory.merge import is_relaxed_clarification_answer, merge_clarification_answer
 from app.memory.models import ConversationTurn, SessionMemory, StoredRecommendation
 from app.memory.session_store import FileSessionStore
+from app.monitoring import get_logger
 from app.orchestration.pipeline import (
     maybe_enrich_search_output,
     run_analyst,
     run_finalizer,
     run_searcher,
 )
+
+_logger = get_logger(__name__)
 
 
 class ConversationService:
@@ -44,8 +48,24 @@ class ConversationService:
                         self._append_memory_preference(session.accepted_soft_preferences, key, value)
         self._extend_unique_items(session.external_signal_history, list(intent.external_signals or []))
 
+    def _log_turn_common(self, session: SessionMemory, extra: dict | None = None) -> dict:
+        return {
+            "session_id": session.session_id,
+            "turn_index": session.analytics.turn_count,
+            "state": session.state,
+            "clarification_count": session.clarification_count,
+            "shown_titles_count": len(session.shown_titles),
+            "feedback_signals_count": len(session.feedback_signals),
+            "accepted_preferences_keys": list(session.accepted_soft_preferences.keys()),
+            "rejected_preferences_keys": list(session.rejected_soft_preferences.keys()),
+            "external_signal_count": len(session.external_signal_history),
+            **(extra or {}),
+        }
+
     def start_session(self) -> SessionMemory:
-        return self.store.create_session()
+        session = self.store.create_session()
+        _logger.info("chat_session_started", session_id=session.session_id)
+        return session
 
     def load_session(self, session_id: str) -> SessionMemory:
         return self.store.load_session(session_id)
@@ -60,8 +80,51 @@ class ConversationService:
 
     def handle_message(self, session_id: str, message: str) -> ConversationResponse:
         session = self.store.load_session(session_id)
+        session.analytics.mark_turn_started()
         session.turns.append(ConversationTurn(role="user", message=message))
 
+        _logger.info("chat_turn_started", **self._log_turn_common(session, {
+            "user_message_length": len(message),
+        }))
+
+        started = time.perf_counter()
+        try:
+            response = self._dispatch_message(session, message)
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            session.analytics.mark_turn_completed(latency_ms=latency_ms, response_type=response.type)
+
+            if response.type == "clarification":
+                _logger.info("clarification_requested", **self._log_turn_common(session, {
+                    "response_type": response.type,
+                    "latency_ms": latency_ms,
+                }))
+            elif response.type in ("recommendations", "refined_recommendations"):
+                rec_count = len(response.recommendations)
+                _logger.info("recommendations_generated", **self._log_turn_common(session, {
+                    "response_type": response.type,
+                    "latency_ms": latency_ms,
+                    "recommendation_count": rec_count,
+                    "has_posters": any(r.poster_url for r in response.recommendations),
+                }))
+
+            _logger.info("chat_turn_completed", **self._log_turn_common(session, {
+                "response_type": response.type,
+                "latency_ms": latency_ms,
+            }))
+
+            self.store.save_session(session)
+            return response
+        except Exception as exc:
+            latency_ms = int((time.perf_counter() - started) * 1000)
+            session.analytics.mark_error()
+            _logger.error("chat_turn_failed", **self._log_turn_common(session, {
+                "error": str(exc),
+                "latency_ms": latency_ms,
+            }))
+            self.store.save_session(session)
+            raise
+
+    def _dispatch_message(self, session: SessionMemory, message: str) -> ConversationResponse:
         feedback = self._parse_feedback(message)
         if session.state == "recommended" and feedback is not None:
             return self._handle_feedback(session, message, feedback)
@@ -81,6 +144,10 @@ class ConversationService:
                     or session.clarification_count >= 2
                     or resolved_content_type
                 ):
+                    session.analytics.mark_recommendation_round(
+                        titles_count=0,
+                        unique_titles=len(session.shown_titles),
+                    )
                     return self._build_recommendation_response(
                         session=session,
                         intent=merged_intent,
@@ -95,7 +162,7 @@ class ConversationService:
                     session.clarification_count += 1
                     refreshed_intent.clarification_count = session.clarification_count
                     session.state = "awaiting_clarification"
-                    self.store.save_session(session)
+                    session.analytics.mark_clarification()
                     return ConversationResponse(
                         type="clarification",
                         session_id=session.session_id,
@@ -104,6 +171,10 @@ class ConversationService:
                         state=session.state,
                     )
 
+                session.analytics.mark_recommendation_round(
+                    titles_count=0,
+                    unique_titles=len(session.shown_titles),
+                )
                 return self._build_recommendation_response(
                     session=session,
                     intent=refreshed_intent,
@@ -118,7 +189,7 @@ class ConversationService:
             session.clarification_count += 1
             intent.clarification_count = session.clarification_count
             session.state = "awaiting_clarification"
-            self.store.save_session(session)
+            session.analytics.mark_clarification()
             return ConversationResponse(
                 type="clarification",
                 session_id=session.session_id,
@@ -127,6 +198,10 @@ class ConversationService:
                 state=session.state,
             )
 
+        session.analytics.mark_recommendation_round(
+            titles_count=0,
+            unique_titles=len(session.shown_titles),
+        )
         return self._build_recommendation_response(
             session=session,
             intent=intent,
@@ -147,7 +222,6 @@ class ConversationService:
         session.state = "refining"
 
         if not feedback.requires_refinement:
-            self.store.save_session(session)
             return ConversationResponse(
                 type="clarification",
                 session_id=session.session_id,
@@ -158,7 +232,6 @@ class ConversationService:
 
         intent = self._build_refined_intent(session, feedback)
         if intent is None:
-            self.store.save_session(session)
             return ConversationResponse(
                 type="clarification",
                 session_id=session.session_id,
@@ -167,6 +240,8 @@ class ConversationService:
                 state=session.state,
             )
 
+        session.analytics.mark_refinement()
+        _logger.info("refinement_generated", **self._log_turn_common(session))
         return self._build_recommendation_response(
             session=session,
             intent=intent,
@@ -232,7 +307,14 @@ class ConversationService:
             [item.title for item in recommendations if item.title not in session.shown_titles]
         )
         session.state = "recommended"
-        self.store.save_session(session)
+
+        if enriched_output.get("enrichment_used"):
+            session.analytics.mark_enrichment_used()
+
+        session.analytics.mark_recommendation_round(
+            titles_count=len(recommendations),
+            unique_titles=len(session.shown_titles),
+        )
         return ConversationResponse(
             type=response_type,
             session_id=session.session_id,

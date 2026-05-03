@@ -12,7 +12,7 @@ from app.agents.definitions import (
 )
 from app.contracts.analyst import AnalystIntent
 from app.contracts.search import Candidate, SearchResult
-from app.monitoring import get_logger
+from app.monitoring import FALLBACKS_TOTAL, get_logger
 from app.search.enricher import enrich_shortlisted_titles
 from app.tools.netflix_search import NetflixSearchTool
 
@@ -113,6 +113,7 @@ def run_analyst(query: str) -> AnalystIntent:
         return AnalystIntent.model_validate(json_module.loads(analyst_json))
     except Exception as exc:
         _logger.warning("analyst_fallback_used", query=query, error=str(exc))
+        FALLBACKS_TOTAL.labels(stage="analyst").inc()
         return build_fallback_intent(query)
 
 
@@ -188,6 +189,7 @@ def run_searcher(intent: AnalystIntent, last_tool_result: dict | None = None) ->
         return search_output
     except Exception as exc:
         _logger.warning("searcher_fallback_used", query=intent.query, error=str(exc))
+        FALLBACKS_TOTAL.labels(stage="searcher").inc()
         return build_fallback_search_result(intent).model_dump_json(ensure_ascii=False)
 
 

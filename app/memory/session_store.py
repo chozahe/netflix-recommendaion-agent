@@ -12,6 +12,7 @@ class FileSessionStore:
 
     def create_session(self) -> SessionMemory:
         session = SessionMemory(session_id=str(uuid4()))
+        session.analytics.mark_started()
         self.save_session(session)
         return session
 

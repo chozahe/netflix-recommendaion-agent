@@ -42,6 +42,7 @@
 - finalizer-driven poster lookup только для уже подтверждённых тайтлов
 - optional `poster_url` в ответах API/CLI-рекомендациях
 - chat CLI пытается показать постер inline через `kitten icat`, а при неудаче печатает URL
+- session-level observability: analytics, structured logs, Prometheus metrics, HTML report
 
 ---
 
@@ -123,6 +124,7 @@ Searcher может: выбрать route, перепробывать друго
 - обрабатывает негативный feedback, обновляет preference memory и запускает refinement
 - merge'ит `posters` из Finalizer output обратно в `StoredRecommendation.poster_url`
 - отдаёт структурированный `ConversationResponse`
+- автоматически собирает session-level analytics: число ходов, latency, clarifications, refinements, fallbacks, enrichment usage
 
 ---
 
@@ -183,7 +185,9 @@ Searcher может: выбрать route, перепробывать друго
 `recommendations` теперь сериализуются как `StoredRecommendation` с optional `poster_url`.
 
 ### `SessionMemory`
-JSON-память сессии: `session_id`, `state`, `turns`, `shown_titles`, `rejected_titles`, `current_intent`, `last_recommendations`, `feedback_signals`, `clarification_count`, `accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history`
+JSON-память сессии: `session_id`, `state`, `turns`, `shown_titles`, `rejected_titles`, `current_intent`, `last_recommendations`, `feedback_signals`, `clarification_count`, `accepted_soft_preferences`, `rejected_soft_preferences`, `external_signal_history`, `analytics`
+
+`analytics` содержит: `started_at`, `last_updated_at`, `turn_count`, `user_turn_count`, `assistant_turn_count`, `clarification_turn_count`, `recommendation_round_count`, `refinement_round_count`, `error_count`, `total_latency_ms`, `last_latency_ms`, `last_response_type`, `recommended_titles_count`, `unique_titles_count`, `fallback_count`, `enrichment_used_count`
 
 ### `StoredRecommendation`
 `title`, `reason`, `poster_url`
@@ -243,7 +247,9 @@ FINALIZER_MODEL=openai/deepseek-v4-flash
 | Search/filtering | pandas | Работа с Netflix CSV |
 | Validation | Pydantic | Контракты между этапами |
 | Logging | structlog | Структурированные логи |
-| Metrics | prometheus-client | Метрики запросов |
+| Metrics | prometheus-client | Метрики запросов и чат-сессий |
+| Session analytics | Pydantic models + JSON files | Наблюдаемость на уровне сессий |
+| Observability report | HTML generator | Визуальный просмотр всех сессий |
 | Testing | pytest | Unit/integration tests |
 
 ---
@@ -260,7 +266,8 @@ app/
 ├── evals/            # Local eval runner
 ├── llm/              # Universal provider routing
 ├── memory/           # Session models + file store
-├── monitoring/       # structlog + prometheus
+├── monitoring/       # structlog + prometheus + session metrics
+├── observability/    # HTML report generator for session analytics
 ├── orchestration/    # Pipeline wiring + fallbacks
 ├── runtime/          # Local bootstrap (логи)
 ├── search/           # Catalog retrieval + text normalization + enrichment hooks + poster lookup helpers
@@ -363,6 +370,7 @@ LOG_FILE=logs/app.log
 pytest -v                         # все тесты
 python -m app.evals.run_evals     # one-shot + clarification smoke
 python -m app.chat_main           # interactive chat
+python -m app.observability.report # generate HTML observability report
 ```
 
 ---
@@ -424,10 +432,69 @@ Enrichment: при необходимости делает bounded DuckDuckGo se
 Finalizer: формирует ответ только из проверенного shortlist
 ```
 
-## Мониторинг
+## Observability
 
-- **Prometheus:** `http://localhost:8001/metrics`
-- **Логи:** `logs/app.log` + stdout
+Система наблюдаемости состоит из трёх уровней:
+
+### 1. Prometheus metrics (агрегаты)
+
+При запуске chat CLI или API автоматически поднимается HTTP-сервер метрик на порту `METRICS_PORT` (по умолчанию `8001`).
+
+Доступные метрики:
+- `netflix_agent_requests_total{status}` — общее число one-shot запросов
+- `netflix_agent_request_duration_seconds` — длительность one-shot запросов
+- `netflix_agent_chat_sessions_total` — число запущенных чат-сессий
+- `netflix_agent_chat_turns_total{status,type}` — число ходов в чате
+- `netflix_agent_chat_turn_duration_seconds` — длительность хода
+- `netflix_agent_clarifications_total` — число clarification-запросов
+- `netflix_agent_refinements_total` — число refinement-раундов
+- `netflix_agent_recommendations_total` — число recommendation-раундов
+- `netflix_agent_fallbacks_total{stage}` — число fallback'ов по стадиям (analyst/searcher)
+
+**Как посмотреть:**
+```bash
+curl http://localhost:8001/metrics
+```
+
+Prometheus — это стандартный способ экспорта метрик приложения по HTTP. Это не UI и не база данных, а текстовый endpoint с текущими значениями счётчиков. Можно подключить Grafana для визуализации, но для локального использования достаточно `curl`.
+
+### 2. Structured logs (события)
+
+Все события логируются через `structlog` в файл `logs/app.log` и в stdout.
+
+Основные события:
+- `chat_session_started` / `chat_session_ended`
+- `chat_turn_started` / `chat_turn_completed` / `chat_turn_failed`
+- `clarification_requested`
+- `recommendations_generated`
+- `refinement_generated`
+- `analyst_started` / `analyst_finished` / `analyst_fallback_used`
+- `searcher_started` / `searcher_finished` / `searcher_fallback_used`
+- `finalizer_started` / `finalizer_finished`
+
+Каждое событие содержит: `session_id`, `turn_index`, `state`, `response_type`, `latency_ms`, `clarification_count`, `recommendation_count` и другие контекстные поля.
+
+### 3. Session analytics (детали по сессии)
+
+Каждая сессия автоматически собирает аналитику в поле `analytics` внутри JSON-файла сессии (`memory/sessions/*.json`).
+
+Это позволяет постфактум разобрать любой диалог: сколько было ходов, сколько clarifications, какая latency, какие тайтлы рекомендовались, какие preferences накопились.
+
+### HTML Report (визуальный просмотр)
+
+Для удобного просмотра всех сессий есть offline HTML-отчёт:
+
+```bash
+python -m app.observability.report
+```
+
+Генерирует `logs/observability_report.html` с:
+- summary cards: общее число сессий, ходов, clarifications, refinements, errors, fallbacks
+- таблица сессий с раскрывающимися деталями
+- по каждой сессии: state, timestamps, latency, рекомендации, preferences, external signals
+- raw JSON snapshot для глубокого анализа
+
+**Не требует новых зависимостей** — работает на стандартном Python.
 
 ---
 
