@@ -44,7 +44,12 @@ class AnthropicMessagesLLM(LLM):
             "x-api-key": settings.openai_api_key,
             "anthropic-version": "2023-06-01",
         }
-        response = httpx.post(_ANTHROPIC_API_URL, json=body, headers=headers, timeout=120)
+        response = httpx.post(
+            _ANTHROPIC_API_URL,
+            json=body,
+            headers=headers,
+            timeout=settings.llm_timeout_seconds,
+        )
         response.raise_for_status()
         data = response.json()
         texts = [block["text"] for block in data.get("content", []) if block.get("type") == "text"]
@@ -61,4 +66,5 @@ def create_provider_llm(model: str, temperature: float):
         base_url=settings.openai_base_url,
         model=model,
         temperature=temperature,
+        timeout=settings.llm_timeout_seconds,
     )

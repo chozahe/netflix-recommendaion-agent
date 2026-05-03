@@ -21,6 +21,7 @@ def build_analyst_agent() -> Agent:
         llm=create_analyst_llm(),
         verbose=settings.agents_verbose,
         allow_delegation=False,
+        max_iter=settings.analyst_max_iter,
     )
 
 
@@ -39,6 +40,7 @@ def build_searcher_agent() -> Agent:
         llm=create_search_llm(),
         verbose=settings.agents_verbose,
         allow_delegation=False,
+        max_iter=settings.searcher_max_iter,
     )
 
 
@@ -52,4 +54,5 @@ def build_finalizer_agent() -> Agent:
         llm=create_finalizer_llm(),
         verbose=settings.agents_verbose,
         allow_delegation=False,
+        max_iter=settings.finalizer_max_iter,
     )

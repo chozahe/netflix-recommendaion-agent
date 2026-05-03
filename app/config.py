@@ -49,6 +49,11 @@ class Settings(BaseModel):
     search_temperature: float = env_float("SEARCH_TEMPERATURE", 0.0)
     finalizer_temperature: float = env_float("FINALIZER_TEMPERATURE", 0.4)
 
+    llm_timeout_seconds: int = env_int("LLM_TIMEOUT_SECONDS", 45)
+    analyst_max_iter: int = env_int("ANALYST_MAX_ITER", 2)
+    searcher_max_iter: int = env_int("SEARCHER_MAX_ITER", 3)
+    finalizer_max_iter: int = env_int("FINALIZER_MAX_ITER", 2)
+
     agents_verbose: bool = env_bool("AGENTS_VERBOSE", True)
 
     netflix_csv_path: str = os.getenv("NETFLIX_CSV_PATH", "data/netflix_titles.csv")
